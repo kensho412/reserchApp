@@ -385,17 +385,21 @@ struct WebView: NSViewRepresentable {
         guard context.coordinator.loaded != url else { return }
         context.coordinator.loaded = url
 
-        let origin = "\(url.scheme ?? "https")://\(url.host ?? "www.youtube.com")"
+        // The parent page must be a NEUTRAL third-party origin (not youtube.com),
+        // otherwise YouTube rejects the embed (e.g. error 152). example.com is a
+        // reserved, always-valid origin and is never actually fetched here.
+        let parentOrigin = "https://www.example.com"
+        let src = url.absoluteString + (url.query == nil ? "?playsinline=1&rel=0" : "&playsinline=1&rel=0")
         let html = """
         <!DOCTYPE html><html><head>
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <style>html,body{margin:0;padding:0;background:#000;height:100%;overflow:hidden}
         iframe{border:0;width:100%;height:100%}</style></head>
-        <body><iframe src="\(url.absoluteString)"
+        <body><iframe src="\(src)"
           allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
           allowfullscreen></iframe></body></html>
         """
-        webView.loadHTMLString(html, baseURL: URL(string: origin))
+        webView.loadHTMLString(html, baseURL: URL(string: parentOrigin))
     }
 
     final class Coordinator { var loaded: URL? }
