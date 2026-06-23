@@ -8,3 +8,6 @@ backend/data/
 macapp/.build/
 macapp/.swiftpm/
 .DS_Store
+
+# Built app bundle
+macapp/ResearchAtlas.app/
