@@ -5,6 +5,7 @@ thumbnail URL, so we resolve it once via Vimeo's free, key-less oEmbed endpoint.
 """
 from __future__ import annotations
 
+import re
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -14,8 +15,6 @@ import httpx
 # actually points at the venue, so the tag means something specific (e.g. #nime
 # == accepted at / published by NIME), not an LLM guess.
 _VENUE_DOMAINS: dict[str, str] = {
-    "nime.org": "nime",
-    "nime.pubpub.org": "nime",
     "ntticc.or.jp": "icc",
     "ycam.jp": "ycam",
     "iamas.ac.jp": "iamas",
@@ -23,6 +22,10 @@ _VENUE_DOMAINS: dict[str, str] = {
     "ars.electronica.art": "media-art",
     "zkm.de": "media-art",
 }
+
+# NIME uses a different domain every year: nime.org, nime2024.org, nime2025.org…
+# plus the PubPub proceedings host.
+_NIME_HOST_RE = re.compile(r"^(nime\d{2,4}|nime)\.org$")
 
 
 def source_venue_tags(url: str | None) -> list[str]:
@@ -36,9 +39,12 @@ def source_venue_tags(url: str | None) -> list[str]:
     if host.startswith("www."):
         host = host[4:]
     tags: list[str] = []
+    if _NIME_HOST_RE.match(host) or host == "nime.pubpub.org" or host.endswith(".nime.org"):
+        tags.append("nime")
     for domain, tag in _VENUE_DOMAINS.items():
         if host == domain or host.endswith("." + domain):
-            tags.append(tag)
+            if tag not in tags:
+                tags.append(tag)
     return tags
 
 
