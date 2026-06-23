@@ -51,15 +51,17 @@ def source_venue_tags(url: str | None) -> list[str]:
 def content_venue_tags(text: str | None) -> list[str]:
     """Venue tags inferred from a document's own text (evidence in the content).
 
-    NIME papers carry 'New Interfaces for Musical Expression' in the proceedings
-    title and a per-page footer, so the phrase recurs. Requiring several hits
-    avoids tagging a paper that merely *cites* one NIME reference.
+    NIME papers carry the conference byline (e.g. "NIME'18, June 3-6, 2018, …")
+    and the proceedings title. PDF extraction often breaks phrases across lines,
+    so match whitespace-tolerantly. The byline is a strong single signal; the
+    proceedings title needs several hits so a lone citation doesn't trigger it.
     """
     if not text:
         return []
     tags: list[str] = []
-    hits = len(re.findall(r"New Interfaces for Musical Expression", text, re.IGNORECASE))
-    if hits >= 3:
+    byline = re.search(r"NIME\s*['’]\s*\d{2}", text)            # NIME'18 / NIME ’23
+    phrase = len(re.findall(r"New\s+Interfaces\s+for\s+Musical\s+Expression", text, re.IGNORECASE))
+    if byline or phrase >= 3:
         tags.append("nime")
     return tags
 
