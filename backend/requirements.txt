@@ -1,0 +1,9 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+sqlmodel==0.0.22
+httpx==0.28.1
+python-multipart==0.0.20
+pymupdf==1.25.1
+trafilatura==2.0.0
+chromadb==0.5.23

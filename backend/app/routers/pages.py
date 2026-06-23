@@ -1,0 +1,231 @@
+"""Page CRUD, search, file/URL ingestion, and similar-page lookup."""
+from __future__ import annotations
+
+import uuid
+from pathlib import Path
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File
+from sqlmodel import Session, select
+
+from .. import config, crud, extract, llm_pipeline, models, schemas, textutils
+from ..database import get_session, session_dep
+
+router = APIRouter(prefix="/pages", tags=["pages"])
+
+
+@router.get("", response_model=list[schemas.PageCard])
+def list_pages(
+    query: str = "",
+    tags: str = "",                       # comma-separated, AND semantics
+    sort: str = "updated",                # updated | created | title
+    session: Session = Depends(session_dep),
+):
+    free, query_tags = textutils.parse_search_query(query)
+    required = [t.strip().lstrip("#").lower() for t in tags.split(",") if t.strip()]
+    required = list(dict.fromkeys(required + query_tags))
+
+    stmt = select(models.Page)
+    if free:
+        like = f"%{free}%"
+        stmt = stmt.where(
+            (models.Page.title.like(like))
+            | (models.Page.body.like(like))
+            | (models.Page.summary_ja.like(like))
+        )
+    pages = session.exec(stmt).all()
+
+    # AND-filter by tags in Python (small personal dataset).
+    if required:
+        kept = []
+        for p in pages:
+            names = set(crud.page_tag_names(session, p.id))
+            if all(t in names for t in required):
+                kept.append(p)
+        pages = kept
+
+    if sort == "title":
+        pages.sort(key=lambda p: p.title.lower())
+    elif sort == "created":
+        pages.sort(key=lambda p: p.created_at, reverse=True)
+    else:
+        pages.sort(key=lambda p: p.updated_at, reverse=True)
+
+    return [crud.to_card(session, p) for p in pages]
+
+
+@router.post("", response_model=schemas.PageRead, status_code=201)
+def create_page(payload: schemas.PageCreate, session: Session = Depends(session_dep)):
+    # Cosense-style: if a page with this title exists, return it instead.
+    existing = session.exec(
+        select(models.Page).where(models.Page.title == payload.title)
+    ).first()
+    if existing:
+        return crud.to_read(session, existing)
+
+    page = models.Page(title=payload.title, type=payload.type, body=payload.body)
+    session.add(page)
+    session.flush()
+    crud.set_page_tags(session, page, textutils.extract_tags(page.body))
+    crud.sync_links(session, page)
+    session.commit()
+    session.refresh(page)
+    return crud.to_read(session, page)
+
+
+@router.get("/{page_id}", response_model=schemas.PageRead)
+def get_page(page_id: str, session: Session = Depends(session_dep)):
+    page = session.get(models.Page, page_id)
+    if not page:
+        raise HTTPException(404, "page not found")
+    return crud.to_read(session, page)
+
+
+@router.patch("/{page_id}", response_model=schemas.PageRead)
+def update_page(page_id: str, payload: schemas.PageUpdate, session: Session = Depends(session_dep)):
+    page = session.get(models.Page, page_id)
+    if not page:
+        raise HTTPException(404, "page not found")
+
+    data = payload.model_dump(exclude_unset=True)
+    explicit_tags = data.pop("tags", None)
+    authors = data.pop("authors", None)
+    for k, v in data.items():
+        setattr(page, k, v)
+    if authors is not None:
+        page.authors = authors
+
+    # Tags: explicit set wins; otherwise re-derive from body when body changed.
+    if explicit_tags is not None:
+        crud.set_page_tags(session, page, explicit_tags)
+    elif "body" in data:
+        crud.set_page_tags(session, page, textutils.extract_tags(page.body))
+    if "body" in data:
+        crud.sync_links(session, page)
+
+    crud.touch(page)
+    session.add(page)
+    session.commit()
+    session.refresh(page)
+    return crud.to_read(session, page)
+
+
+@router.delete("/{page_id}", status_code=204)
+def delete_page(page_id: str, session: Session = Depends(session_dep)):
+    from .. import vector
+
+    page = session.get(models.Page, page_id)
+    if not page:
+        raise HTTPException(404, "page not found")
+    for pt in session.exec(select(models.PageTag).where(models.PageTag.page_id == page_id)).all():
+        session.delete(pt)
+    for pl in session.exec(select(models.PageLink).where(models.PageLink.from_id == page_id)).all():
+        session.delete(pl)
+    session.delete(page)
+    session.commit()
+    vector.delete(page_id)
+
+
+# --- ingestion ---------------------------------------------------------------
+def _run_pipeline(page_id: str, ex: extract.Extracted, **kw) -> None:
+    """Background task: open its own session + event loop."""
+    import asyncio
+
+    with get_session() as session:
+        page = session.get(models.Page, page_id)
+        if page:
+            asyncio.run(llm_pipeline.process_page(session, page, ex=ex, **kw))
+
+
+@router.post("/{page_id}/upload_pdf", response_model=schemas.PageRead)
+def upload_pdf(
+    page_id: str,
+    background: BackgroundTasks,
+    file: UploadFile = File(...),
+    session: Session = Depends(session_dep),
+):
+    page = session.get(models.Page, page_id)
+    if not page:
+        raise HTTPException(404, "page not found")
+
+    rel = f"{uuid.uuid4()}.pdf"
+    dest: Path = config.FILES_DIR / rel
+    dest.write_bytes(file.file.read())
+    page.pdf_path = rel
+    crud.touch(page)
+    session.add(page)
+    session.commit()
+    session.refresh(page)
+
+    ex = extract.extract_pdf(dest)
+    background.add_task(_run_pipeline, page_id, ex)
+    return crud.to_read(session, page)
+
+
+@router.post("/{page_id}/submit_url", response_model=schemas.PageRead)
+def submit_url(
+    page_id: str,
+    payload: schemas.SubmitURL,
+    background: BackgroundTasks,
+    session: Session = Depends(session_dep),
+):
+    page = session.get(models.Page, page_id)
+    if not page:
+        raise HTTPException(404, "page not found")
+
+    page.source_url = payload.url
+    crud.touch(page)
+    session.add(page)
+    session.commit()
+    session.refresh(page)
+
+    ex = extract.extract_url(payload.url)
+    background.add_task(_run_pipeline, page_id, ex)
+    return crud.to_read(session, page)
+
+
+# --- similar -----------------------------------------------------------------
+@router.get("/{page_id}/similar", response_model=list[schemas.SimilarPage])
+def similar(page_id: str, session: Session = Depends(session_dep)):
+    from .. import vector
+    import asyncio
+
+    page = session.get(models.Page, page_id)
+    if not page:
+        raise HTTPException(404, "page not found")
+
+    results: dict[str, schemas.SimilarPage] = {}
+
+    # 1. Same-tags pages.
+    my_tags = set(crud.page_tag_names(session, page_id))
+    if my_tags:
+        for other in session.exec(select(models.Page).where(models.Page.id != page_id)).all():
+            shared = my_tags & set(crud.page_tag_names(session, other.id))
+            if shared:
+                results[other.id] = schemas.SimilarPage(
+                    id=other.id, title=other.title, type=other.type,
+                    score=len(shared) / len(my_tags), reason="same-tags",
+                )
+
+    # 2. Embedding neighbours (re-embed this page's text, then ANN query).
+    from .. import ollama_client
+
+    source = " \n".join(filter(None, [page.title, page.summary_ja, page.body[:2000]]))
+    if source.strip():
+        try:
+            vec = asyncio.run(ollama_client.embed(source))
+        except Exception:
+            vec = None
+        if vec:
+            for pid, sc in vector.query(vec, n=8, exclude_id=page_id):
+                other = session.get(models.Page, pid)
+                if not other:
+                    continue
+                if pid in results:
+                    results[pid].score = max(results[pid].score, sc)
+                else:
+                    results[pid] = schemas.SimilarPage(
+                        id=pid, title=other.title, type=other.type,
+                        score=sc, reason="embedding",
+                    )
+
+    return sorted(results.values(), key=lambda s: s.score, reverse=True)[:10]

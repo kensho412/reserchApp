@@ -1,0 +1,10 @@
+# Python
+backend/.venv/
+__pycache__/
+*.pyc
+backend/data/
+
+# Swift
+macapp/.build/
+macapp/.swiftpm/
+.DS_Store
