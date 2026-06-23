@@ -368,22 +368,34 @@ enum VideoEmbed {
     }
 }
 
-/// Minimal WKWebView wrapper for embedding a video player.
+/// Embeds a video player by wrapping the player URL in an <iframe> inside an
+/// HTML page whose baseURL is the player's host. Loading the embed URL as the
+/// top-level frame is rejected by YouTube ("Video unavailable"); giving it a
+/// proper origin via an iframe + baseURL is the reliable approach.
 struct WebView: NSViewRepresentable {
-    let url: URL
+    let url: URL          // embeddable player URL (…/embed/<id>, player.vimeo.com/…)
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeNSView(context: Context) -> WKWebView {
-        let v = WKWebView()
-        v.setValue(false, forKey: "drawsBackground")   // transparent backing
-        return v
+        WKWebView(frame: .zero, configuration: WKWebViewConfiguration())
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
         guard context.coordinator.loaded != url else { return }
         context.coordinator.loaded = url
-        webView.load(URLRequest(url: url))
+
+        let origin = "\(url.scheme ?? "https")://\(url.host ?? "www.youtube.com")"
+        let html = """
+        <!DOCTYPE html><html><head>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>html,body{margin:0;padding:0;background:#000;height:100%;overflow:hidden}
+        iframe{border:0;width:100%;height:100%}</style></head>
+        <body><iframe src="\(url.absoluteString)"
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+          allowfullscreen></iframe></body></html>
+        """
+        webView.loadHTMLString(html, baseURL: URL(string: origin))
     }
 
     final class Coordinator { var loaded: URL? }
