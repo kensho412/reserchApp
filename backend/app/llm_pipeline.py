@@ -17,7 +17,7 @@ import json
 
 from sqlmodel import Session, select
 
-from . import config, crud, extract, models, ollama_client, prompts
+from . import config, crud, extract, media, models, ollama_client, prompts
 from .seed_tags import SEED_TAGS
 
 _VOCAB = [name for name, _ in SEED_TAGS]
@@ -62,6 +62,8 @@ async def process_page(session: Session, page: models.Page, *, ex: extract.Extra
     # Auto-apply the suggested tags to the page (additive, deduplicated).
     if suggested:
         crud.add_page_tags(session, page, suggested)
+    # Precise venue tags from the source domain (evidence-based, e.g. #nime).
+    crud.add_page_tags(session, page, media.source_venue_tags(page.source_url))
 
     # Fill empty page metadata (never clobber user-provided values).
     if not page.summary_ja and out.summary_ja:

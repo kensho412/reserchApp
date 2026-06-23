@@ -106,6 +106,12 @@ def update_page(page_id: str, payload: schemas.PageUpdate, session: Session = De
             if thumb:
                 page.thumbnail_url = thumb
 
+    # Precise venue tags implied by the source URL (e.g. NIME source -> #nime).
+    if "source_url" in data and page.source_url:
+        from .. import media
+
+        crud.add_page_tags(session, page, media.source_venue_tags(page.source_url))
+
     # Tags: an explicit set replaces everything; otherwise body #tags are added
     # (additive, so LLM-applied tags survive body edits / autosave).
     if explicit_tags is not None:
@@ -197,6 +203,12 @@ def submit_url(
 
 
 # --- similar -----------------------------------------------------------------
+# Tuning knobs. In a field where everything shares broad tags (#media-art,
+# #installation), rarity-weighting + thresholds keep "Similar" meaningful.
+MIN_TAG_SCORE = 0.30        # weighted shared-tag overlap required (0..1)
+MIN_EMBED_SCORE = 0.62      # cosine similarity required for an embedding match
+
+
 @router.get("/{page_id}/similar", response_model=list[schemas.SimilarPage])
 def similar(page_id: str, session: Session = Depends(session_dep)):
     from .. import vector
@@ -208,18 +220,25 @@ def similar(page_id: str, session: Session = Depends(session_dep)):
 
     results: dict[str, schemas.SimilarPage] = {}
 
-    # 1. Same-tags pages.
+    # 1. Same-tags, weighted by tag rarity (IDF). Sharing a rare tag (chladni)
+    #    counts; sharing a ubiquitous one (media-art) barely moves the score.
+    weights = crud.tag_idf(session)
     my_tags = set(crud.page_tag_names(session, page_id))
-    if my_tags:
+    my_weight = sum(weights.get(t, 1.0) for t in my_tags)
+    if my_tags and my_weight > 0:
         for other in session.exec(select(models.Page).where(models.Page.id != page_id)).all():
             shared = my_tags & set(crud.page_tag_names(session, other.id))
-            if shared:
+            if not shared:
+                continue
+            score = sum(weights.get(t, 1.0) for t in shared) / my_weight
+            if score >= MIN_TAG_SCORE:
                 results[other.id] = schemas.SimilarPage(
                     id=other.id, title=other.title, type=other.type,
-                    score=len(shared) / len(my_tags), reason="same-tags",
+                    score=round(score, 3), reason="same-tags",
                 )
 
-    # 2. Embedding neighbours (re-embed this page's text, then ANN query).
+    # 2. Embedding neighbours (re-embed this page's text, then ANN query),
+    #    only above a similarity threshold so the whole corpus doesn't qualify.
     from .. import ollama_client
 
     source = " \n".join(filter(None, [page.title, page.summary_ja, page.body[:2000]]))
@@ -230,15 +249,17 @@ def similar(page_id: str, session: Session = Depends(session_dep)):
             vec = None
         if vec:
             for pid, sc in vector.query(vec, n=8, exclude_id=page_id):
+                if sc < MIN_EMBED_SCORE:
+                    continue
                 other = session.get(models.Page, pid)
                 if not other:
                     continue
                 if pid in results:
-                    results[pid].score = max(results[pid].score, sc)
+                    results[pid].score = max(results[pid].score, round(sc, 3))
                 else:
                     results[pid] = schemas.SimilarPage(
                         id=pid, title=other.title, type=other.type,
-                        score=sc, reason="embedding",
+                        score=round(sc, 3), reason="embedding",
                     )
 
     return sorted(results.values(), key=lambda s: s.score, reverse=True)[:10]

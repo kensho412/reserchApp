@@ -4,9 +4,23 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 
-from sqlmodel import Session, select
+import math
+
+from sqlmodel import Session, func, select
 
 from . import media, models, schemas, textutils
+
+
+def tag_idf(session: Session) -> dict[str, float]:
+    """Inverse-document-frequency weight per tag. Tags shared by almost every
+    page weigh ~0; rare tags weigh high. Used to make similarity discriminating."""
+    total = len(session.exec(select(models.Page.id)).all()) or 1
+    rows = session.exec(
+        select(models.Tag.name, func.count(models.PageTag.page_id))
+        .join(models.PageTag, models.PageTag.tag_id == models.Tag.id)
+        .group_by(models.Tag.name)
+    ).all()
+    return {name: math.log((1 + total) / (1 + df)) for name, df in rows}
 
 
 def card_thumbnail(page: models.Page) -> str | None:

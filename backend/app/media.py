@@ -10,6 +10,38 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 
 
+# Source domain -> precise venue tag. Evidence-based: the page's source_url
+# actually points at the venue, so the tag means something specific (e.g. #nime
+# == accepted at / published by NIME), not an LLM guess.
+_VENUE_DOMAINS: dict[str, str] = {
+    "nime.org": "nime",
+    "nime.pubpub.org": "nime",
+    "ntticc.or.jp": "icc",
+    "ycam.jp": "ycam",
+    "iamas.ac.jp": "iamas",
+    "geidai.ac.jp": "geidai",
+    "ars.electronica.art": "media-art",
+    "zkm.de": "media-art",
+}
+
+
+def source_venue_tags(url: str | None) -> list[str]:
+    """Precise tags implied by the source URL's domain (venue evidence)."""
+    if not url:
+        return []
+    try:
+        host = (urlparse(url).hostname or "").lower()
+    except ValueError:
+        return []
+    if host.startswith("www."):
+        host = host[4:]
+    tags: list[str] = []
+    for domain, tag in _VENUE_DOMAINS.items():
+        if host == domain or host.endswith("." + domain):
+            tags.append(tag)
+    return tags
+
+
 def youtube_id(url: str) -> str | None:
     try:
         p = urlparse(url)
