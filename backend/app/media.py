@@ -6,9 +6,35 @@ thumbnail URL, so we resolve it once via Vimeo's free, key-less oEmbed endpoint.
 from __future__ import annotations
 
 import re
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urljoin, urlparse
 
 import httpx
+
+_OG_IMAGE_RE = re.compile(
+    r'<meta[^>]+(?:property|name)=["\']og:image(?::secure_url)?["\'][^>]+content=["\']([^"\']+)["\']'
+    r'|<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:property|name)=["\']og:image["\']'
+    r'|<meta[^>]+name=["\']twitter:image["\'][^>]+content=["\']([^"\']+)["\']',
+    re.IGNORECASE,
+)
+
+
+def fetch_og_image(url: str | None) -> str | None:
+    """Fetch a page and return its og:image (or twitter:image) as an absolute URL."""
+    if not url:
+        return None
+    try:
+        with httpx.Client(timeout=8, follow_redirects=True,
+                          headers={"User-Agent": "Mozilla/5.0 (ResearchAtlas)"}) as client:
+            r = client.get(url)
+        if r.status_code != 200:
+            return None
+        m = _OG_IMAGE_RE.search(r.text)
+        if not m:
+            return None
+        img = next(g for g in m.groups() if g)
+        return urljoin(url, img)
+    except (httpx.HTTPError, StopIteration):
+        return None
 
 
 # Source domain -> precise venue tag. Evidence-based: the page's source_url

@@ -90,6 +90,7 @@ def update_page(page_id: str, payload: schemas.PageUpdate, session: Session = De
     explicit_tags = data.pop("tags", None)
     authors = data.pop("authors", None)
     old_video = page.video_url
+    old_source = page.source_url
     for k, v in data.items():
         setattr(page, k, v)
     if authors is not None:
@@ -111,6 +112,13 @@ def update_page(page_id: str, payload: schemas.PageUpdate, session: Session = De
         from .. import media
 
         crud.add_page_tags(session, page, media.source_venue_tags(page.source_url))
+        # Pull the official page's og:image as the card thumbnail (unless a video
+        # already provides one, or a thumbnail is already set). Only on change.
+        if (page.source_url != old_source and not page.video_url
+                and not page.thumbnail_url and not page.thumbnail_path):
+            img = media.fetch_og_image(page.source_url)
+            if img:
+                page.thumbnail_url = img
 
     # Tags: an explicit set replaces everything; otherwise body #tags are added
     # (additive, so LLM-applied tags survive body edits / autosave).
