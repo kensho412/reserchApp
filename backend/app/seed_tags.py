@@ -39,9 +39,26 @@ SEED_TAGS: list[tuple[str, str]] = [
     ("cross-modal", "topic"), ("synesthesia", "topic"), ("mutation", "topic"),
     ("hybrid", "topic"), ("chimera", "topic"), ("autonomous-system", "topic"),
     ("human-machine", "topic"), ("environmental", "topic"),
-    # 展示・研究文脈 (source / context)
-    ("nime", "source"), ("media-art", "context"), ("icc", "source"),
+    # 査読つき学会 (venue) — peer-reviewed conferences, evidence-based only
+    ("nime", "venue"), ("icmc", "venue"), ("smc", "venue"), ("dafx", "venue"),
+    ("ismir", "venue"), ("aes", "venue"), ("isea", "venue"), ("tenor", "venue"),
+    ("jssa", "venue"),
+    # 展示・施設 (source) + 研究文脈 (context)
+    ("media-art", "context"), ("icc", "source"),
     ("ycam", "source"), ("iamas", "source"), ("geidai", "source"),
     ("academic-paper", "context"), ("case-study", "context"), ("reference", "context"),
     ("precedent", "context"),
 ]
+
+# Peer-reviewed conference tags. These get a strong similarity boost (sharing a
+# venue == strong "related precedent" signal) and are evidence-only.
+CONFERENCE_TAGS: set[str] = {
+    "nime", "icmc", "smc", "dafx", "ismir", "aes", "isea", "tenor", "jssa",
+}
+
+# Exhibition venues / institutions: evidence-only too, but not conference-boosted.
+EXHIBITION_TAGS: set[str] = {"icc", "ycam", "iamas", "geidai"}
+
+# Tags the LLM must never assign — they only come from a source domain or the
+# document's own content (see media.source_venue_tags / content_venue_tags).
+EVIDENCE_ONLY_TAGS: set[str] = CONFERENCE_TAGS | EXHIBITION_TAGS

@@ -18,13 +18,10 @@ import json
 from sqlmodel import Session, select
 
 from . import config, crud, extract, media, models, ollama_client, prompts
-from .seed_tags import SEED_TAGS
+from .seed_tags import EVIDENCE_ONLY_TAGS, SEED_TAGS
 
 # Venue / provenance tags must come from evidence (source domain or document
-# content), never from an LLM guess — otherwise everything media-art-ish gets
-# tagged #nime. Keep them out of the LLM vocabulary and filter them from output.
-EVIDENCE_ONLY_TAGS = {"nime", "icc", "ycam", "iamas", "geidai"}
-
+# content), never from an LLM guess — keep them out of the vocabulary.
 _VOCAB = [name for name, _ in SEED_TAGS if name not in EVIDENCE_ONLY_TAGS]
 
 

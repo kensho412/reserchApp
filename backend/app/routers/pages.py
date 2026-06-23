@@ -207,11 +207,13 @@ def submit_url(
 # #installation), rarity-weighting + thresholds keep "Similar" meaningful.
 MIN_TAG_SCORE = 0.30        # weighted shared-tag overlap required (0..1)
 MIN_EMBED_SCORE = 0.62      # cosine similarity required for an embedding match
+VENUE_BONUS = 1.0           # added per shared peer-reviewed conference tag
 
 
 @router.get("/{page_id}/similar", response_model=list[schemas.SimilarPage])
 def similar(page_id: str, session: Session = Depends(session_dep)):
     from .. import vector
+    from ..seed_tags import CONFERENCE_TAGS
     import asyncio
 
     page = session.get(models.Page, page_id)
@@ -222,6 +224,8 @@ def similar(page_id: str, session: Session = Depends(session_dep)):
 
     # 1. Same-tags, weighted by tag rarity (IDF). Sharing a rare tag (chladni)
     #    counts; sharing a ubiquitous one (media-art) barely moves the score.
+    #    Sharing a peer-reviewed conference (nime, icmc…) is boosted hard so
+    #    same-venue precedents always surface at the top.
     weights = crud.tag_idf(session)
     my_tags = set(crud.page_tag_names(session, page_id))
     my_weight = sum(weights.get(t, 1.0) for t in my_tags)
@@ -230,11 +234,14 @@ def similar(page_id: str, session: Session = Depends(session_dep)):
             shared = my_tags & set(crud.page_tag_names(session, other.id))
             if not shared:
                 continue
-            score = sum(weights.get(t, 1.0) for t in shared) / my_weight
-            if score >= MIN_TAG_SCORE:
+            base = sum(weights.get(t, 1.0) for t in shared) / my_weight
+            shared_venues = shared & CONFERENCE_TAGS
+            score = base + VENUE_BONUS * len(shared_venues)
+            if score >= MIN_TAG_SCORE or shared_venues:
                 results[other.id] = schemas.SimilarPage(
                     id=other.id, title=other.title, type=other.type,
-                    score=round(score, 3), reason="same-tags",
+                    score=round(score, 3),
+                    reason="same-venue" if shared_venues else "same-tags",
                 )
 
     # 2. Embedding neighbours (re-embed this page's text, then ANN query),

@@ -21,10 +21,15 @@ _VENUE_DOMAINS: dict[str, str] = {
     "geidai.ac.jp": "geidai",
     "ars.electronica.art": "media-art",
     "zkm.de": "media-art",
+    # Peer-reviewed conferences with stable domains.
+    "smcnetwork.org": "smc",
+    "ismir.net": "ismir",
+    "dafx.de": "dafx",
+    "computermusic.org": "icmc",
+    "aes.org": "aes",
 }
 
 # NIME uses a different domain every year: nime.org, nime2024.org, nime2025.org…
-# plus the PubPub proceedings host.
 _NIME_HOST_RE = re.compile(r"^(nime\d{2,4}|nime)\.org$")
 
 
@@ -48,21 +53,38 @@ def source_venue_tags(url: str | None) -> list[str]:
     return tags
 
 
-def content_venue_tags(text: str | None) -> list[str]:
-    """Venue tags inferred from a document's own text (evidence in the content).
+# (tag, acronym-with-year regex, full-name regex, min full-name hits). A paper
+# carries its own venue's acronym+year and repeats the full name in title/footer;
+# a single citation of another venue won't reach the hit threshold.
+_VENUE_SIGNATURES: list[tuple[str, str | None, str, int]] = [
+    ("nime",  r"NIME\s*['’]?\s*\d{2,4}",  r"New\s+Interfaces\s+for\s+Musical\s+Expression", 3),
+    ("icmc",  r"ICMC\s*['’]?\s*\d{2,4}",  r"International\s+Computer\s+Music\s+Conference", 2),
+    ("smc",   r"\bSMC\s*['’]?\s*\d{2,4}", r"Sound\s+and\s+Music\s+Computing", 2),
+    ("dafx",  r"DAFx-?\d{2,4}",           r"International\s+Conference\s+on\s+Digital\s+Audio\s+Effects", 2),
+    ("ismir", r"ISMIR\s*['’]?\s*\d{2,4}", r"International\s+Society\s+for\s+Music\s+Information\s+Retrieval", 2),
+    ("aes",   r"AES\s+\d{1,3}(?:st|nd|rd|th)\s+Convention", r"Audio\s+Engineering\s+Society", 3),
+    ("isea",  r"ISEA\s*['’]?\s*\d{2,4}",  r"International\s+Symposium\s+on\s+Electronic\s+Art", 2),
+    ("tenor", r"TENOR\s*['’]?\s*\d{2,4}", r"Technologies\s+for\s+Music\s+Notation\s+and\s+Representation", 2),
+    ("jssa",  r"\bJSSA\b",                 r"先端芸術音楽創作学会", 1),
+]
 
-    NIME papers carry the conference byline (e.g. "NIME'18, June 3-6, 2018, …")
-    and the proceedings title. PDF extraction often breaks phrases across lines,
-    so match whitespace-tolerantly. The byline is a strong single signal; the
-    proceedings title needs several hits so a lone citation doesn't trigger it.
+
+def content_venue_tags(text: str | None) -> list[str]:
+    """Conference tags inferred from a document's own text (content evidence).
+
+    PDF extraction breaks phrases across lines, so the full-name regex is
+    whitespace-tolerant. The acronym+year byline (e.g. NIME'18, ICMC 2019) is a
+    strong single signal; the full name needs several hits so a lone citation
+    doesn't trigger it.
     """
     if not text:
         return []
     tags: list[str] = []
-    byline = re.search(r"NIME\s*['’]\s*\d{2}", text)            # NIME'18 / NIME ’23
-    phrase = len(re.findall(r"New\s+Interfaces\s+for\s+Musical\s+Expression", text, re.IGNORECASE))
-    if byline or phrase >= 3:
-        tags.append("nime")
+    for tag, acronym, fullname, min_hits in _VENUE_SIGNATURES:
+        byline = bool(acronym) and re.search(acronym, text) is not None
+        hits = len(re.findall(fullname, text, re.IGNORECASE))
+        if byline or hits >= min_hits:
+            tags.append(tag)
     return tags
 
 

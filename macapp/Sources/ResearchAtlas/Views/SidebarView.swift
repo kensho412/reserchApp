@@ -20,6 +20,13 @@ struct SidebarView: View {
                     }
                 }
 
+                let sameVenue = state.similar.filter { $0.reason == "same-venue" }
+                if !sameVenue.isEmpty {
+                    section("Same Venue（同じ学会）") {
+                        pageList(sameVenue)
+                    }
+                }
+
                 let sameTags = state.similar.filter { $0.reason == "same-tags" }
                 section("Same Tags") {
                     pageList(sameTags)
