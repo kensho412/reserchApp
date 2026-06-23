@@ -22,7 +22,8 @@ class Extracted:
     title: str = ""
     authors: list[str] = field(default_factory=list)
     year: int | None = None
-    thumbnail_path: str | None = None      # relative to FILES_DIR
+    thumbnail_path: str | None = None      # local file relative to FILES_DIR
+    image_url: str | None = None           # remote og:image from the source page
     text_path: str | None = None           # relative to FILES_DIR
 
 
@@ -78,10 +79,12 @@ def extract_url(url: str) -> Extracted:
         m = re.search(r"(19|20)\d{2}", meta.date)
         if m:
             year = int(m.group(0))
+    image_url = (meta.image if meta and getattr(meta, "image", None) else None)
 
     return Extracted(
         text=text.strip(),
         title=title or _guess_title(text),
+        image_url=image_url,
         authors=authors,
         year=year or _guess_year(text),
         text_path=_save_text(text) if text else None,

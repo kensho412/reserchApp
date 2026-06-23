@@ -74,20 +74,19 @@ final class AppState: ObservableObject {
         Task { await search() }
     }
 
-    // MARK: Page creation (Cosense flow)
-    /// Open the page named by the search field; create it if it doesn't exist.
-    func openOrCreateFromSearch() async {
-        let title = freeText.trimmingCharacters(in: .whitespaces)
-        guard !title.isEmpty else { return }
-        if let existing = cards.first(where: { $0.title.caseInsensitiveCompare(title) == .orderedSame }) {
-            await open(existing.id)
-            return
-        }
+    // MARK: Page creation
+    /// Create a fresh page and open its editor immediately.
+    /// Uses a unique placeholder title (the backend de-dupes by exact title),
+    /// which the user overwrites in the editor's title field.
+    func createNewPage() async {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "MM/dd HH:mm:ss"
+        let placeholder = "無題 \(fmt.string(from: Date()))"
         do {
-            let page = try await api.createPage(title: title)
-            await reload()
+            let page = try await api.createPage(title: placeholder)
+            await refreshTags()
             openPage = page
-        } catch { status("Create failed: \(error.localizedDescription)") }
+        } catch { status("作成に失敗しました: \(error.localizedDescription)") }
     }
 
     func open(_ id: String) async {
@@ -104,13 +103,19 @@ final class AppState: ObservableObject {
     }
 
     // MARK: Mutations
-    func savePage(title: String, body: String, type: String) async {
+    func savePage(title: String, body: String, type: String,
+                  sourceURL: String, videoURL: String) async {
         guard let id = openPage?.id else { return }
+        var fields: [String: Any] = ["title": title, "body": body, "type": type]
+        // Send empty strings as JSON null so cleared fields are actually cleared.
+        fields["source_url"] = sourceURL.isEmpty ? NSNull() : sourceURL
+        fields["video_url"] = videoURL.isEmpty ? NSNull() : videoURL
         do {
-            openPage = try await api.updatePage(id, fields: ["title": title, "body": body, "type": type])
+            openPage = try await api.updatePage(id, fields: fields)
             similar = (try? await api.similar(id)) ?? []
             await refreshTags()
-        } catch { status("Save failed: \(error.localizedDescription)") }
+            status("保存しました")
+        } catch { status("保存に失敗しました: \(error.localizedDescription)") }
     }
 
     func setTags(_ tags: [String]) async {

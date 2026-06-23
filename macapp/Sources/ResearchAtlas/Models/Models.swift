@@ -10,6 +10,7 @@ struct PageCard: Codable, Identifiable, Hashable {
     let summary_ja: String
     let authors: [String]
     let year: Int?
+    let thumbnail: String?      // absolute URL, or "files/<name>" resolved against server URL
     let updated_at: Date
 }
 

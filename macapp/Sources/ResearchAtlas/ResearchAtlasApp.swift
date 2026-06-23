@@ -16,7 +16,9 @@ struct ResearchAtlasApp: App {
         .windowStyle(.titleBar)
         .commands {
             CommandGroup(after: .newItem) {
-                Button("検索にフォーカス / 新規ページ") { state.closePage() }
+                Button("新規ページ") { Task { await state.createNewPage() } }
+                    .keyboardShortcut("n", modifiers: .command)
+                Button("一覧へ戻る") { state.closePage() }
                     .keyboardShortcut("l", modifiers: .command)
             }
         }

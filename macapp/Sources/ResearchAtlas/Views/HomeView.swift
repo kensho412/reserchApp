@@ -11,6 +11,7 @@ struct HomeView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 searchBar
+                if let msg = state.statusMessage { statusBanner(msg) }
                 if !state.activeTags.isEmpty { activeFilterRow }
                 tagCloud
                 Divider().overlay(Theme.stroke)
@@ -27,13 +28,13 @@ struct HomeView: View {
     private var searchBar: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass").foregroundColor(Theme.textSecondary)
-            TextField("検索、または新規ページ名…  例: chladni #installation #instrument",
+            TextField("検索…  例: chladni #installation #instrument",
                       text: $state.searchText)
                 .textFieldStyle(.plain)
                 .font(.system(size: 15))
                 .foregroundColor(Theme.textPrimary)
                 .focused($searchFocused)
-                .onSubmit { Task { await onSubmit() } }
+                .onSubmit { Task { await state.search() } }
                 .onChange(of: state.searchText) { _ in
                     // Live filter as the user types (debounce-free for a small DB).
                     Task { await state.search() }
@@ -43,14 +44,15 @@ struct HomeView: View {
                     Image(systemName: "xmark.circle.fill").foregroundColor(Theme.textTertiary)
                 }.buttonStyle(.plain)
             }
-            Button { Task { await onSubmit() } } label: {
-                Text("＋ページ").font(.system(size: 12, weight: .semibold))
-                    .padding(.horizontal, 10).padding(.vertical, 5)
+            Button { Task { await state.createNewPage() } } label: {
+                Label("新規ページ", systemImage: "plus")
+                    .font(.system(size: 12, weight: .semibold))
+                    .padding(.horizontal, 12).padding(.vertical, 5)
                     .background(Theme.accent.opacity(0.22))
                     .foregroundColor(Theme.accent)
                     .clipShape(Capsule())
             }.buttonStyle(.plain)
-            .help("Enter で既存ページを開く / なければ新規作成")
+            .help("空の編集画面を開いて新規作成（⌘N）")
         }
         .padding(.horizontal, 14).padding(.vertical, 11)
         .background(Theme.cardBg)
@@ -58,15 +60,20 @@ struct HomeView: View {
         .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
-    private func onSubmit() async {
-        // If free text names an unknown page -> create it; otherwise just filter.
-        let trimmed = state.freeText.trimmingCharacters(in: .whitespaces)
-        let exists = state.cards.contains { $0.title.caseInsensitiveCompare(trimmed) == .orderedSame }
-        if !trimmed.isEmpty && !exists {
-            await state.openOrCreateFromSearch()
-        } else {
-            await state.search()
+    // MARK: status / error banner
+    @ViewBuilder private func statusBanner(_ msg: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill").foregroundColor(.orange)
+            Text(msg).font(.system(size: 12)).foregroundColor(Theme.textPrimary)
+            Spacer()
+            Button { state.statusMessage = nil } label: {
+                Image(systemName: "xmark.circle.fill").foregroundColor(Theme.textTertiary)
+            }.buttonStyle(.plain)
         }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .background(Color.orange.opacity(0.14))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.orange.opacity(0.35)))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
     // MARK: active filter
@@ -137,34 +144,63 @@ struct PageCardView: View {
     @State private var hover = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            HStack(spacing: 6) {
-                Image(systemName: PageTypeStyle.symbol(card.type))
-                    .font(.system(size: 11)).foregroundColor(Theme.textTertiary)
-                Text(card.title).font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(Theme.textPrimary).lineLimit(2)
-            }
-            if !card.summary_ja.isEmpty {
-                Text(card.summary_ja).font(.system(size: 12))
-                    .foregroundColor(Theme.textSecondary).lineLimit(2)
-            }
-            if !card.tags.isEmpty {
-                FlowLayout(spacing: 4, lineSpacing: 4) {
-                    ForEach(card.tags.prefix(4), id: \.self) { t in
-                        TagChip(name: t) { state.toggleTag(t) }
+        VStack(alignment: .leading, spacing: 0) {
+            thumbnailView                        // edge-to-edge image (only if available)
+            VStack(alignment: .leading, spacing: 7) {
+                HStack(spacing: 6) {
+                    Image(systemName: PageTypeStyle.symbol(card.type))
+                        .font(.system(size: 11)).foregroundColor(Theme.textTertiary)
+                    Text(card.title).font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(Theme.textPrimary).lineLimit(2)
+                }
+                if !card.summary_ja.isEmpty {
+                    Text(card.summary_ja).font(.system(size: 12))
+                        .foregroundColor(Theme.textSecondary).lineLimit(2)
+                }
+                if !card.tags.isEmpty {
+                    FlowLayout(spacing: 4, lineSpacing: 4) {
+                        ForEach(card.tags.prefix(4), id: \.self) { t in
+                            TagChip(name: t) { state.toggleTag(t) }
+                        }
                     }
                 }
+                if !card.authors.isEmpty || card.year != nil {
+                    Text(metaLine).font(.system(size: 10)).foregroundColor(Theme.textTertiary)
+                }
             }
-            if !card.authors.isEmpty || card.year != nil {
-                Text(metaLine).font(.system(size: 10)).foregroundColor(Theme.textTertiary)
-            }
+            .padding(12)
         }
-        .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(hover ? Theme.cardBgHover : Theme.cardBg)
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.stroke))
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .onHover { hover = $0 }
+    }
+
+    // Thumbnail: video frame / og:image / PDF page. Collapses to nothing if absent or it fails to load.
+    @ViewBuilder private var thumbnailView: some View {
+        if let url = thumbURL {
+            AsyncImage(url: url) { phase in
+                switch phase {
+                case .success(let img):
+                    img.resizable().aspectRatio(contentMode: .fill)
+                        .frame(maxWidth: .infinity).frame(height: 130).clipped()
+                case .empty:
+                    Rectangle().fill(Theme.cardBgHover).frame(height: 130)
+                        .overlay(ProgressView().controlSize(.small))
+                default:
+                    EmptyView()        // failure -> show nothing
+                }
+            }
+        }
+    }
+
+    private var thumbURL: URL? {
+        guard let t = card.thumbnail, !t.isEmpty else { return nil }
+        if t.hasPrefix("http") { return URL(string: t) }
+        var base = state.serverURLString
+        if base.hasSuffix("/") { base.removeLast() }
+        return URL(string: "\(base)/\(t)")     // resolve "files/<name>" against server
     }
 
     private var metaLine: String {

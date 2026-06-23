@@ -1,7 +1,9 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import AppKit
+import WebKit
 
-/// Cosense-style page editor: a big body text area is the source of truth.
+/// Dedicated page editor: 作品名 → 本文 → リンク → 動画埋め込み → PDF を上から並べる。
 /// LLM results appear as "AI Suggestions" the user can Accept into the body.
 struct PageDetailView: View {
     @EnvironmentObject var state: AppState
@@ -10,8 +12,10 @@ struct PageDetailView: View {
     @State private var title: String = ""
     @State private var bodyText: String = ""
     @State private var type: String = "note"
-    @State private var urlField: String = ""
+    @State private var sourceURL: String = ""
+    @State private var videoURL: String = ""
     @State private var dropTargeted = false
+    @FocusState private var titleFocused: Bool
 
     var body: some View {
         HStack(spacing: 0) {
@@ -25,21 +29,34 @@ struct PageDetailView: View {
     }
 
     private func load() {
-        title = page.title; bodyText = page.body; type = page.type
+        // A freshly created page has a placeholder title: show an empty field
+        // (with the prompt) and focus it so the user types the real name.
+        let isPlaceholder = page.title.hasPrefix("無題 ")
+        title = isPlaceholder ? "" : page.title
+        bodyText = page.body
+        type = page.type
+        sourceURL = page.source_url ?? ""
+        videoURL = page.video_url ?? ""
+        if isPlaceholder { titleFocused = true }
+    }
+
+    private func save() {
+        // Don't blank the title if the user saved without naming the page.
+        let finalTitle = title.trimmingCharacters(in: .whitespaces).isEmpty ? page.title : title
+        Task { await state.savePage(title: finalTitle, body: bodyText, type: type,
+                                    sourceURL: sourceURL, videoURL: videoURL) }
     }
 
     // MARK: editor
     private var editorColumn: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 16) {
                 toolbar
-                TextField("Title", text: $title)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 22, weight: .bold))
-                    .foregroundColor(Theme.textPrimary)
-
-                sourceRow
-                bodyEditor
+                titleField                       // 1. 作品名
+                bodyEditor                       // 2. 本文テキスト
+                linkSection                      // 3. リンク貼り付け
+                videoSection                     // 4. 動画リンク → 埋め込み
+                pdfSection                       // 5. PDF 貼り付け
                 if let llm = page.llm { AISuggestionsView(llm: llm, currentBody: $bodyText) }
                 translationPanel
             }
@@ -47,24 +64,32 @@ struct PageDetailView: View {
         }
         .frame(maxWidth: .infinity)
         .onDrop(of: [.fileURL, .pdf], isTargeted: $dropTargeted) { handleDrop($0) }
-        .overlay(dropTargeted ? Theme.accent.opacity(0.08) : .clear)
+        .overlay(dropTargeted
+                 ? RoundedRectangle(cornerRadius: 12).stroke(Theme.accent, lineWidth: 2).padding(8)
+                 : nil)
     }
 
     private var toolbar: some View {
         HStack(spacing: 10) {
-            Button { state.closePage() } label: {
-                Label("Home", systemImage: "chevron.left").font(.system(size: 12))
+            Button { save(); state.closePage() } label: {
+                Label("一覧へ", systemImage: "chevron.left").font(.system(size: 12))
             }.buttonStyle(.plain).foregroundColor(Theme.accent)
+            .help("保存して一覧に戻る")
 
             Picker("", selection: $type) {
                 ForEach(PageTypeStyle.all, id: \.self) { Text($0).tag($0) }
             }.pickerStyle(.menu).frame(width: 120)
 
+            if state.isWorking {
+                ProgressView().controlSize(.small)
+            }
+
             Spacer()
 
-            Button { Task { await state.savePage(title: title, body: bodyText, type: type) } } label: {
+            Button { save() } label: {
                 Text("保存").font(.system(size: 12, weight: .semibold))
             }.buttonStyle(.borderedProminent).tint(Theme.accent)
+            .keyboardShortcut("s", modifiers: .command)
 
             Menu("AI") {
                 Button("要約・タグ再解析") { Task { await state.reanalyze() } }
@@ -74,50 +99,120 @@ struct PageDetailView: View {
         }
     }
 
-    private var sourceRow: some View {
+    // 1. 作品名
+    private var titleField: some View {
+        TextField("作品名・ページ名", text: $title)
+            .textFieldStyle(.plain)
+            .font(.system(size: 24, weight: .bold))
+            .foregroundColor(Theme.textPrimary)
+            .focused($titleFocused)
+            .onSubmit { save() }
+    }
+
+    // 2. 本文テキスト
+    private var bodyEditor: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            sectionLabel("本文  —  #tag と [[内部リンク]] が自動抽出されます")
+            TextEditor(text: $bodyText)
+                .font(.system(size: 14))
+                .foregroundColor(Theme.textPrimary)
+                .scrollContentBackground(.hidden)
+                .frame(minHeight: 280)
+                .padding(8)
+                .background(Theme.cardBg)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+    }
+
+    // 3. リンク貼り付け（source URL）— 貼って解析すると LLM が要約・タグを生成
+    private var linkSection: some View {
         VStack(alignment: .leading, spacing: 6) {
+            sectionLabel("リンク（出典 URL）")
             HStack(spacing: 6) {
-                Image(systemName: "link").foregroundColor(Theme.textTertiary).font(.system(size: 11))
-                TextField("source: URL を貼り付け → Enter で解析", text: $urlField)
-                    .textFieldStyle(.plain).font(.system(size: 12))
+                Image(systemName: "link").foregroundColor(Theme.textTertiary).font(.system(size: 12))
+                TextField("https://… を貼り付け", text: $sourceURL)
+                    .textFieldStyle(.plain).font(.system(size: 13))
                     .foregroundColor(Theme.accent)
-                    .onSubmit {
-                        guard !urlField.isEmpty else { return }
-                        Task { await state.submitURL(urlField); urlField = "" }
+                if let url = URL(string: sourceURL), !sourceURL.isEmpty {
+                    Link(destination: url) {
+                        Image(systemName: "arrow.up.right.square").foregroundColor(Theme.accent)
                     }
+                }
+                Button("解析") {
+                    guard !sourceURL.isEmpty else { return }
+                    Task { await state.submitURL(sourceURL) }
+                }
+                .controlSize(.small)
+                .disabled(sourceURL.isEmpty)
+                .help("URL の本文を取得し、LLM で要約・タグ候補・翻訳を生成")
             }
-            if let src = page.source_url, !src.isEmpty {
-                Link(src, destination: URL(string: src) ?? URL(string: "about:blank")!)
-                    .font(.system(size: 11)).foregroundColor(Theme.accent).lineLimit(1)
+            .padding(10)
+            .background(Theme.cardBg)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+    }
+
+    // 4. 動画リンク → 埋め込み
+    private var videoSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            sectionLabel("動画リンク")
+            HStack(spacing: 6) {
+                Image(systemName: "play.rectangle").foregroundColor(Theme.textTertiary).font(.system(size: 12))
+                TextField("YouTube / Vimeo の URL を貼り付け", text: $videoURL)
+                    .textFieldStyle(.plain).font(.system(size: 13))
+                    .foregroundColor(Theme.accent)
+            }
+            .padding(10)
+            .background(Theme.cardBg)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+
+            if let embed = VideoEmbed.url(from: videoURL) {
+                WebView(url: embed)
+                    .frame(height: 260)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+            } else if !videoURL.isEmpty {
+                Text("※ 埋め込み対応は YouTube / Vimeo。その他はリンクとして保存されます。")
+                    .font(.system(size: 11)).foregroundColor(Theme.textTertiary)
+            }
+        }
+    }
+
+    // 5. PDF 貼り付け（ドラッグ&ドロップ or 選択）
+    private var pdfSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            sectionLabel("PDF")
+            HStack(spacing: 10) {
+                Button {
+                    pickPDF()
+                } label: {
+                    Label("PDF を選択", systemImage: "doc.badge.plus").font(.system(size: 12))
+                }.controlSize(.small)
+                Text("またはこの画面に PDF をドラッグ&ドロップ")
+                    .font(.system(size: 11)).foregroundColor(Theme.textTertiary)
+                Spacer()
             }
             if let pdf = page.pdf_path {
-                Label("PDF 添付済み (\(pdf))", systemImage: "doc.fill")
+                Label("添付済み: \(pdf)", systemImage: "doc.fill")
                     .font(.system(size: 11)).foregroundColor(Theme.textSecondary)
-            }
-            if state.isWorking, let msg = state.statusMessage {
-                HStack(spacing: 6) {
-                    ProgressView().controlSize(.small)
-                    Text(msg).font(.system(size: 11)).foregroundColor(Theme.textSecondary)
-                }
             }
         }
         .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(Theme.cardBg)
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
-    private var bodyEditor: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("BODY  —  #tag と [[内部リンク]] が自動抽出されます")
-                .font(.system(size: 10, weight: .bold)).foregroundColor(Theme.textTertiary)
-            TextEditor(text: $bodyText)
-                .font(.system(size: 14, design: .default))
-                .foregroundColor(Theme.textPrimary)
-                .scrollContentBackground(.hidden)
-                .frame(minHeight: 320)
-                .padding(8)
-                .background(Theme.cardBg)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+    private func sectionLabel(_ t: String) -> some View {
+        Text(t).font(.system(size: 10, weight: .bold)).foregroundColor(Theme.textTertiary)
+    }
+
+    private func pickPDF() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.pdf]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        if panel.runModal() == .OK, let url = panel.url {
+            Task { await state.uploadPDF(url) }
         }
     }
 
@@ -242,4 +337,54 @@ struct AISuggestionsView: View {
         if !currentBody.isEmpty && !currentBody.hasSuffix("\n") { currentBody += "\n" }
         currentBody += text
     }
+}
+
+// MARK: - Video embedding
+
+/// Converts a YouTube / Vimeo watch URL into an embeddable player URL.
+enum VideoEmbed {
+    static func url(from raw: String) -> URL? {
+        let s = raw.trimmingCharacters(in: .whitespaces)
+        guard !s.isEmpty, let comps = URLComponents(string: s), let host = comps.host?.lowercased()
+        else { return nil }
+
+        // YouTube: youtu.be/<id>, youtube.com/watch?v=<id>, youtube.com/embed/<id>
+        if host.contains("youtu.be") {
+            let id = comps.path.split(separator: "/").last.map(String.init) ?? ""
+            return id.isEmpty ? nil : URL(string: "https://www.youtube.com/embed/\(id)")
+        }
+        if host.contains("youtube.com") {
+            if comps.path.hasPrefix("/embed/") { return URL(string: s) }
+            if let v = comps.queryItems?.first(where: { $0.name == "v" })?.value {
+                return URL(string: "https://www.youtube.com/embed/\(v)")
+            }
+        }
+        // Vimeo: vimeo.com/<id> -> player.vimeo.com/video/<id>
+        if host.contains("vimeo.com") {
+            let id = comps.path.split(separator: "/").last.map(String.init) ?? ""
+            if let n = Int(id) { return URL(string: "https://player.vimeo.com/video/\(n)") }
+        }
+        return nil
+    }
+}
+
+/// Minimal WKWebView wrapper for embedding a video player.
+struct WebView: NSViewRepresentable {
+    let url: URL
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> WKWebView {
+        let v = WKWebView()
+        v.setValue(false, forKey: "drawsBackground")   // transparent backing
+        return v
+    }
+
+    func updateNSView(_ webView: WKWebView, context: Context) {
+        guard context.coordinator.loaded != url else { return }
+        context.coordinator.loaded = url
+        webView.load(URLRequest(url: url))
+    }
+
+    final class Coordinator { var loaded: URL? }
 }

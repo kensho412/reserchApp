@@ -6,7 +6,19 @@ from datetime import datetime, timezone
 
 from sqlmodel import Session, select
 
-from . import models, schemas, textutils
+from . import media, models, schemas, textutils
+
+
+def card_thumbnail(page: models.Page) -> str | None:
+    """Pick the best thumbnail for a card. Priority: video > og:image > PDF."""
+    vid = media.video_thumbnail(page.video_url)
+    if vid:
+        return vid
+    if page.thumbnail_url:
+        return page.thumbnail_url
+    if page.thumbnail_path:
+        return f"files/{page.thumbnail_path}"      # client resolves against server URL
+    return None
 
 
 # --- tags --------------------------------------------------------------------
@@ -76,6 +88,7 @@ def to_card(session: Session, page: models.Page) -> schemas.PageCard:
         summary_ja=page.summary_ja,
         authors=page.authors,
         year=page.year,
+        thumbnail=card_thumbnail(page),
         updated_at=page.updated_at,
     )
 

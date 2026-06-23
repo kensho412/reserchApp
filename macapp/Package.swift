@@ -7,7 +7,19 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "ResearchAtlas",
-            path: "Sources/ResearchAtlas"
+            path: "Sources/ResearchAtlas",
+            exclude: ["Info.plist"],
+            // Embed an Info.plist into the executable so ATS (App Transport
+            // Security) honors the cleartext-HTTP exception needed to reach the
+            // backend over Tailscale (plain HTTP, non-loopback IP).
+            linkerSettings: [
+                .unsafeFlags([
+                    "-Xlinker", "-sectcreate",
+                    "-Xlinker", "__TEXT",
+                    "-Xlinker", "__info_plist",
+                    "-Xlinker", "Sources/ResearchAtlas/Info.plist",
+                ])
+            ]
         )
     ]
 )
