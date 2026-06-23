@@ -89,10 +89,22 @@ def update_page(page_id: str, payload: schemas.PageUpdate, session: Session = De
     data = payload.model_dump(exclude_unset=True)
     explicit_tags = data.pop("tags", None)
     authors = data.pop("authors", None)
+    old_video = page.video_url
     for k, v in data.items():
         setattr(page, k, v)
     if authors is not None:
         page.authors = authors
+
+    # Vimeo thumbnail needs an oEmbed lookup. Resolve it when the video link
+    # changed, or to backfill a Vimeo page that still has no thumbnail.
+    if "video_url" in data:
+        from .. import media
+
+        nv = page.video_url
+        if nv and media.is_vimeo(nv) and (nv != old_video or not page.thumbnail_url):
+            thumb = media.vimeo_thumbnail(nv)
+            if thumb:
+                page.thumbnail_url = thumb
 
     # Tags: explicit set wins; otherwise re-derive from body when body changed.
     if explicit_tags is not None:
