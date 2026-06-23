@@ -53,12 +53,15 @@ async def process_page(session: Session, page: models.Page, *, ex: extract.Extra
         analysis = {}
 
     out.summary_ja = (analysis.get("summary_ja") or "").strip()
-    out.suggested_tags_json = json.dumps(
-        [t.lstrip("#") for t in analysis.get("suggested_tags", [])][:6], ensure_ascii=False
-    )
+    suggested = [t.lstrip("#") for t in analysis.get("suggested_tags", [])][:6]
+    out.suggested_tags_json = json.dumps(suggested, ensure_ascii=False)
     out.related_candidates_json = json.dumps(
         analysis.get("related_candidates", [])[:8], ensure_ascii=False
     )
+
+    # Auto-apply the suggested tags to the page (additive, deduplicated).
+    if suggested:
+        crud.add_page_tags(session, page, suggested)
 
     # Fill empty page metadata (never clobber user-provided values).
     if not page.summary_ja and out.summary_ja:

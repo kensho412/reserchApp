@@ -106,11 +106,12 @@ def update_page(page_id: str, payload: schemas.PageUpdate, session: Session = De
             if thumb:
                 page.thumbnail_url = thumb
 
-    # Tags: explicit set wins; otherwise re-derive from body when body changed.
+    # Tags: an explicit set replaces everything; otherwise body #tags are added
+    # (additive, so LLM-applied tags survive body edits / autosave).
     if explicit_tags is not None:
         crud.set_page_tags(session, page, explicit_tags)
     elif "body" in data:
-        crud.set_page_tags(session, page, textutils.extract_tags(page.body))
+        crud.add_page_tags(session, page, textutils.extract_tags(page.body))
     if "body" in data:
         crud.sync_links(session, page)
 

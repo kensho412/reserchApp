@@ -49,6 +49,18 @@ def set_page_tags(session: Session, page: models.Page, tag_names: list[str]) -> 
         session.add(models.PageTag(page_id=page.id, tag_id=tag.id))
 
 
+def add_page_tags(session: Session, page: models.Page, tag_names: list[str]) -> None:
+    """Add tags to a page (union); never removes existing ones."""
+    existing = set(page_tag_names(session, page.id))
+    for raw in tag_names:
+        name = raw.lstrip("#").lower().strip()
+        if not name or name in existing:
+            continue
+        existing.add(name)
+        tag = get_or_create_tag(session, name)
+        session.add(models.PageTag(page_id=page.id, tag_id=tag.id))
+
+
 def page_tag_names(session: Session, page_id: str) -> list[str]:
     rows = session.exec(
         select(models.Tag.name)
