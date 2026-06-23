@@ -1,44 +1,80 @@
-"""Chroma vector store wrapper for embedding-based similar-page search.
+"""Lightweight, compiler-free vector store for embedding similarity search.
 
-Vectors come from Ollama's embedding model (we pass embeddings in directly, so
-Chroma is used purely as a persistent ANN index — no embedding API calls).
+Chroma/hnswlib need a native C++ toolchain (fails to build on Windows without
+MS Visual C++ Build Tools). For a personal-scale atlas a brute-force cosine
+search over a few thousand vectors is effectively instant, so we keep vectors
+in memory and persist them as a single pickle next to the SQLite DB. Only
+`numpy` is required, which ships prebuilt wheels everywhere.
+
+Public API is unchanged: upsert / query / delete.
 """
 from __future__ import annotations
 
-import chromadb
+import pickle
+import threading
+
+import numpy as np
 
 from . import config
 
-_client = chromadb.PersistentClient(path=str(config.CHROMA_DIR))
-_collection = _client.get_or_create_collection(
-    name="pages",
-    metadata={"hnsw:space": "cosine"},
-)
+_STORE_PATH = config.DATA_DIR / "vectors.pkl"
+_lock = threading.Lock()
 
 
-def upsert(page_id: str, vector: list[float], *, title: str, page_type: str, source_text_type: str) -> None:
-    _collection.upsert(
-        ids=[page_id],
-        embeddings=[vector],
-        metadatas=[{"title": title, "type": page_type, "source_text_type": source_text_type}],
-    )
+def _load() -> dict:
+    if _STORE_PATH.exists():
+        try:
+            with open(_STORE_PATH, "rb") as f:
+                return pickle.load(f)
+        except Exception:  # pragma: no cover - corrupt store -> start fresh
+            return {}
+    return {}
+
+
+# page_id -> {"vec": np.ndarray (L2-normalized), "title", "type", "source_text_type"}
+_store: dict = _load()
+
+
+def _save() -> None:
+    tmp = _STORE_PATH.with_suffix(".pkl.tmp")
+    with open(tmp, "wb") as f:
+        pickle.dump(_store, f)
+    tmp.replace(_STORE_PATH)
+
+
+def _normalize(vector) -> np.ndarray:
+    vec = np.asarray(vector, dtype=np.float32)
+    norm = float(np.linalg.norm(vec))
+    return vec / norm if norm > 0 else vec
+
+
+def upsert(page_id: str, vector: list[float], *, title: str, page_type: str,
+           source_text_type: str) -> None:
+    with _lock:
+        _store[page_id] = {
+            "vec": _normalize(vector),
+            "title": title,
+            "type": page_type,
+            "source_text_type": source_text_type,
+        }
+        _save()
 
 
 def query(vector: list[float], *, n: int = 8, exclude_id: str | None = None) -> list[tuple[str, float]]:
-    """Return [(page_id, score)] where score in [0,1], higher = more similar."""
-    res = _collection.query(query_embeddings=[vector], n_results=n + (1 if exclude_id else 0))
-    ids = res.get("ids", [[]])[0]
-    dists = res.get("distances", [[]])[0]
-    out: list[tuple[str, float]] = []
-    for pid, dist in zip(ids, dists):
-        if pid == exclude_id:
-            continue
-        out.append((pid, 1.0 - float(dist)))      # cosine distance -> similarity
-    return out[:n]
+    """Return [(page_id, score)] with score in [0,1] (higher = more similar)."""
+    q = _normalize(vector)
+    if not np.any(q):
+        return []
+    with _lock:
+        items = [(pid, d["vec"]) for pid, d in _store.items() if pid != exclude_id]
+    # Cosine similarity == dot product since everything is L2-normalized.
+    scored = [(pid, float(np.dot(q, vec))) for pid, vec in items]
+    scored.sort(key=lambda x: x[1], reverse=True)
+    return scored[:n]
 
 
 def delete(page_id: str) -> None:
-    try:
-        _collection.delete(ids=[page_id])
-    except Exception:  # pragma: no cover - best effort
-        pass
+    with _lock:
+        if page_id in _store:
+            del _store[page_id]
+            _save()
