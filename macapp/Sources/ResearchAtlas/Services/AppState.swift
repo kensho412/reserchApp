@@ -103,19 +103,16 @@ final class AppState: ObservableObject {
     }
 
     // MARK: Mutations
-    func savePage(title: String, body: String, type: String,
-                  sourceURL: String, videoURL: String) async {
-        guard let id = openPage?.id else { return }
-        var fields: [String: Any] = ["title": title, "body": body, "type": type]
-        // Send empty strings as JSON null so cleared fields are actually cleared.
-        fields["source_url"] = sourceURL.isEmpty ? NSNull() : sourceURL
-        fields["video_url"] = videoURL.isEmpty ? NSNull() : videoURL
+    /// Auto-save: PATCH the given page (by id, so it works even after the editor
+    /// has moved on or closed). Quiet — no status spam, no similar() recompute.
+    func autoSaveFields(pageID: String, fields: [String: Any]) async {
         do {
-            openPage = try await api.updatePage(id, fields: fields)
-            similar = (try? await api.similar(id)) ?? []
+            let updated = try await api.updatePage(pageID, fields: fields)
+            if openPage?.id == pageID { openPage = updated }
             await refreshTags()
-            status("保存しました")
-        } catch { status("保存に失敗しました: \(error.localizedDescription)") }
+        } catch {
+            status("自動保存に失敗: \(error.localizedDescription)")
+        }
     }
 
     func setTags(_ tags: [String]) async {

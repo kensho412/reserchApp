@@ -17,6 +17,14 @@ struct PageDetailView: View {
     @State private var dropTargeted = false
     @FocusState private var titleFocused: Bool
 
+    // Autosave bookkeeping
+    @State private var autosaveTask: Task<Void, Never>?
+    @State private var savedSnapshot = ""        // last persisted field state
+    @State private var openedPageID = ""         // id currently loaded into the fields
+    @State private var saveState: SaveState = .idle
+    private enum SaveState { case idle, saving, saved }
+    private static let debounce: UInt64 = 900_000_000   // 0.9s
+
     var body: some View {
         HStack(spacing: 0) {
             editorColumn
@@ -26,9 +34,42 @@ struct PageDetailView: View {
         .background(Theme.bg)
         .onAppear(perform: load)
         .onChange(of: page.id) { _ in load() }
+        .onDisappear {
+            // Leaving the editor: flush any pending edits to the page we had open.
+            autosaveTask?.cancel()
+            if snapshot() != savedSnapshot {
+                let id = openedPageID.isEmpty ? page.id : openedPageID
+                let fields = currentFields(fallbackTitle: page.title)
+                Task { await state.autoSaveFields(pageID: id, fields: fields) }
+            }
+        }
+    }
+
+    private func snapshot() -> String {
+        [title, bodyText, type, sourceURL, videoURL].joined(separator: "\u{1}")
+    }
+
+    /// PATCH body. Omits an empty title (keeps the server's existing one) and
+    /// sends cleared URLs as null so they actually clear.
+    private func currentFields(fallbackTitle: String) -> [String: Any] {
+        var f: [String: Any] = ["body": bodyText, "type": type]
+        let t = title.trimmingCharacters(in: .whitespaces)
+        if !t.isEmpty { f["title"] = title }
+        else if !fallbackTitle.isEmpty { f["title"] = fallbackTitle }
+        f["source_url"] = sourceURL.isEmpty ? NSNull() : sourceURL
+        f["video_url"] = videoURL.isEmpty ? NSNull() : videoURL
+        return f
     }
 
     private func load() {
+        // Flush unsaved edits from the previously open page before swapping fields.
+        if !openedPageID.isEmpty, openedPageID != page.id, snapshot() != savedSnapshot {
+            let prevID = openedPageID
+            let fields = currentFields(fallbackTitle: "")
+            Task { await state.autoSaveFields(pageID: prevID, fields: fields) }
+        }
+        autosaveTask?.cancel()
+        openedPageID = page.id
         // A freshly created page has a placeholder title: show an empty field
         // (with the prompt) and focus it so the user types the real name.
         let isPlaceholder = page.title.hasPrefix("無題 ")
@@ -37,14 +78,36 @@ struct PageDetailView: View {
         type = page.type
         sourceURL = page.source_url ?? ""
         videoURL = page.video_url ?? ""
+        savedSnapshot = snapshot()
+        saveState = .idle
         if isPlaceholder { titleFocused = true }
     }
 
-    private func save() {
-        // Don't blank the title if the user saved without naming the page.
-        let finalTitle = title.trimmingCharacters(in: .whitespaces).isEmpty ? page.title : title
-        Task { await state.savePage(title: finalTitle, body: bodyText, type: type,
-                                    sourceURL: sourceURL, videoURL: videoURL) }
+    /// Called on every edit: debounce, then save.
+    private func scheduleAutosave() {
+        autosaveTask?.cancel()
+        guard snapshot() != savedSnapshot else { return }   // unchanged (e.g. just loaded)
+        saveState = .idle
+        autosaveTask = Task {
+            try? await Task.sleep(nanoseconds: Self.debounce)
+            if Task.isCancelled { return }
+            await commitSave()
+        }
+    }
+
+    /// Save immediately (⌘S / Enter in title).
+    private func saveNow() {
+        autosaveTask?.cancel()
+        Task { await commitSave() }
+    }
+
+    @MainActor private func commitSave() async {
+        guard snapshot() != savedSnapshot else { return }
+        let snap = snapshot()
+        saveState = .saving
+        await state.autoSaveFields(pageID: page.id, fields: currentFields(fallbackTitle: page.title))
+        savedSnapshot = snap
+        saveState = .saved
     }
 
     // MARK: editor
@@ -63,6 +126,11 @@ struct PageDetailView: View {
             .padding(20)
         }
         .frame(maxWidth: .infinity)
+        .onChange(of: title) { _ in scheduleAutosave() }
+        .onChange(of: bodyText) { _ in scheduleAutosave() }
+        .onChange(of: type) { _ in scheduleAutosave() }
+        .onChange(of: sourceURL) { _ in scheduleAutosave() }
+        .onChange(of: videoURL) { _ in scheduleAutosave() }
         .onDrop(of: [.fileURL, .pdf], isTargeted: $dropTargeted) { handleDrop($0) }
         .overlay(dropTargeted
                  ? RoundedRectangle(cornerRadius: 12).stroke(Theme.accent, lineWidth: 2).padding(8)
@@ -71,31 +139,43 @@ struct PageDetailView: View {
 
     private var toolbar: some View {
         HStack(spacing: 10) {
-            Button { save(); state.closePage() } label: {
+            Button { state.closePage() } label: {
                 Label("一覧へ", systemImage: "chevron.left").font(.system(size: 12))
             }.buttonStyle(.plain).foregroundColor(Theme.accent)
-            .help("保存して一覧に戻る")
+            .help("一覧に戻る（編集は自動保存されます）")
 
             Picker("", selection: $type) {
                 ForEach(PageTypeStyle.all, id: \.self) { Text($0).tag($0) }
             }.pickerStyle(.menu).frame(width: 120)
 
-            if state.isWorking {
-                ProgressView().controlSize(.small)
-            }
+            if state.isWorking { ProgressView().controlSize(.small) }
 
             Spacer()
 
-            Button { save() } label: {
-                Text("保存").font(.system(size: 12, weight: .semibold))
-            }.buttonStyle(.borderedProminent).tint(Theme.accent)
-            .keyboardShortcut("s", modifiers: .command)
+            saveStateView
 
             Menu("AI") {
                 Button("要約・タグ再解析") { Task { await state.reanalyze() } }
                 Button("論文翻訳（章ごと）") { Task { await state.translate(full: false) } }
                 Button("全文翻訳") { Task { await state.translate(full: true) } }
             }.frame(width: 60)
+
+            // Hidden ⌘S for an immediate save.
+            Button("", action: saveNow).keyboardShortcut("s", modifiers: .command)
+                .opacity(0).frame(width: 0)
+        }
+    }
+
+    @ViewBuilder private var saveStateView: some View {
+        switch saveState {
+        case .saving:
+            HStack(spacing: 4) { ProgressView().controlSize(.small)
+                Text("保存中…").font(.system(size: 11)).foregroundColor(Theme.textTertiary) }
+        case .saved:
+            Label("保存済み", systemImage: "checkmark.circle.fill")
+                .font(.system(size: 11)).foregroundColor(Theme.tagFg)
+        case .idle:
+            Text("自動保存").font(.system(size: 11)).foregroundColor(Theme.textTertiary)
         }
     }
 
@@ -106,7 +186,7 @@ struct PageDetailView: View {
             .font(.system(size: 24, weight: .bold))
             .foregroundColor(Theme.textPrimary)
             .focused($titleFocused)
-            .onSubmit { save() }
+            .onSubmit { saveNow() }
     }
 
     // 2. 本文テキスト
