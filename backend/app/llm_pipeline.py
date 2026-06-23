@@ -20,7 +20,12 @@ from sqlmodel import Session, select
 from . import config, crud, extract, media, models, ollama_client, prompts
 from .seed_tags import SEED_TAGS
 
-_VOCAB = [name for name, _ in SEED_TAGS]
+# Venue / provenance tags must come from evidence (source domain or document
+# content), never from an LLM guess — otherwise everything media-art-ish gets
+# tagged #nime. Keep them out of the LLM vocabulary and filter them from output.
+EVIDENCE_ONLY_TAGS = {"nime", "icc", "ycam", "iamas", "geidai"}
+
+_VOCAB = [name for name, _ in SEED_TAGS if name not in EVIDENCE_ONLY_TAGS]
 
 
 async def process_page(session: Session, page: models.Page, *, ex: extract.Extracted | None = None,
@@ -54,6 +59,8 @@ async def process_page(session: Session, page: models.Page, *, ex: extract.Extra
 
     out.summary_ja = (analysis.get("summary_ja") or "").strip()
     suggested = [t.lstrip("#") for t in analysis.get("suggested_tags", [])][:6]
+    # Drop any evidence-only tags the LLM tried to assign anyway.
+    suggested = [t for t in suggested if t.lower() not in EVIDENCE_ONLY_TAGS]
     out.suggested_tags_json = json.dumps(suggested, ensure_ascii=False)
     out.related_candidates_json = json.dumps(
         analysis.get("related_candidates", [])[:8], ensure_ascii=False
@@ -62,8 +69,10 @@ async def process_page(session: Session, page: models.Page, *, ex: extract.Extra
     # Auto-apply the suggested tags to the page (additive, deduplicated).
     if suggested:
         crud.add_page_tags(session, page, suggested)
-    # Precise venue tags from the source domain (evidence-based, e.g. #nime).
+    # Evidence-based venue tags: from the source domain AND the document content
+    # (e.g. a NIME paper PDF -> #nime even without a nime*.org source URL).
     crud.add_page_tags(session, page, media.source_venue_tags(page.source_url))
+    crud.add_page_tags(session, page, media.content_venue_tags(body_text))
 
     # Fill empty page metadata (never clobber user-provided values).
     if not page.summary_ja and out.summary_ja:

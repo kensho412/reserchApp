@@ -48,6 +48,22 @@ def source_venue_tags(url: str | None) -> list[str]:
     return tags
 
 
+def content_venue_tags(text: str | None) -> list[str]:
+    """Venue tags inferred from a document's own text (evidence in the content).
+
+    NIME papers carry 'New Interfaces for Musical Expression' in the proceedings
+    title and a per-page footer, so the phrase recurs. Requiring several hits
+    avoids tagging a paper that merely *cites* one NIME reference.
+    """
+    if not text:
+        return []
+    tags: list[str] = []
+    hits = len(re.findall(r"New Interfaces for Musical Expression", text, re.IGNORECASE))
+    if hits >= 3:
+        tags.append("nime")
+    return tags
+
+
 def youtube_id(url: str) -> str | None:
     try:
         p = urlparse(url)
