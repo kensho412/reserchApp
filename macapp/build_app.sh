@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build ResearchAtlas.app — a double-clickable macOS app bundle.
+# Build ResearchAtlas.app - a double-clickable macOS app bundle.
 #
 #   ./build_app.sh            # builds ./ResearchAtlas.app
 #   ./build_app.sh --install  # also copies it into /Applications
@@ -13,11 +13,11 @@ APP="ResearchAtlas.app"
 BIN="ResearchAtlas"
 VERSION="0.1.0"
 
-echo "==> Building release binary…"
+echo "==> Building release binary..."
 swift build -c release
 BIN_PATH="$(swift build -c release --show-bin-path)/$BIN"
 
-echo "==> Assembling $APP…"
+echo "==> Assembling $APP..."
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN_PATH" "$APP/Contents/MacOS/$BIN"
@@ -53,12 +53,12 @@ PLIST
 
 # Ad-hoc sign so the app runs without "is damaged" errors on Apple Silicon.
 codesign --force --deep --sign - "$APP" >/dev/null 2>&1 || \
-  echo "   (codesign skipped — app still runs; see Gatekeeper note)"
+  echo "   (codesign skipped - app still runs; see Gatekeeper note)"
 
 echo "==> Built $(pwd)/$APP"
 
 if [[ "${1:-}" == "--install" ]]; then
-    echo "==> Installing to /Applications…"
+    echo "==> Installing to /Applications..."
     rm -rf "/Applications/$APP"
     cp -R "$APP" "/Applications/$APP"
     echo "   Installed. Launch from Spotlight or /Applications."

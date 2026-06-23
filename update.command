@@ -6,14 +6,14 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-echo "==> Updating Research Atlas…"
-echo "==> Pulling latest code…"
+echo "==> Updating Research Atlas..."
+echo "==> Pulling latest code..."
 git pull --ff-only
 
-echo "==> Rebuilding the app…"
+echo "==> Rebuilding the app..."
 cd macapp
 ./build_app.sh --install
 
 echo ""
-echo "✅ Updated. Research Atlas is in /Applications."
+echo "[OK] Updated. Research Atlas is in /Applications."
 echo "   (You can close this window.)"
