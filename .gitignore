@@ -11,3 +11,4 @@ macapp/.swiftpm/
 
 # Built app bundle
 macapp/ResearchAtlas.app/
+macapp/Icon/AppIcon.iconset/
