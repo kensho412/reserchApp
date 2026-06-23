@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>ResearchAtlas</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.researchatlas.app</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <!-- The backend is plain HTTP over Tailscale (no TLS). ATS blocks cleartext
+         HTTP to non-loopback hosts by default, which makes requests to the
+         desktop's Tailscale IP fail. Allow arbitrary loads; the link is already
+         private (Tailscale-only, never exposed to the internet). -->
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsArbitraryLoads</key>
+        <true/>
+    </dict>
+</dict>
+</plist>

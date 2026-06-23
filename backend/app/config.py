@@ -11,10 +11,10 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent          # backend/
 DATA_DIR = Path(os.getenv("ATLAS_DATA_DIR", BASE_DIR / "data"))
 FILES_DIR = DATA_DIR / "files"                             # PDFs / thumbnails / extracted text
-CHROMA_DIR = DATA_DIR / "chroma"                           # vector store
 DB_PATH = DATA_DIR / "atlas.db"
+# Embedding vectors persist as DATA_DIR/vectors.pkl (see vector.py).
 
-for _p in (DATA_DIR, FILES_DIR, CHROMA_DIR):
+for _p in (DATA_DIR, FILES_DIR):
     _p.mkdir(parents=True, exist_ok=True)
 
 DATABASE_URL = os.getenv("ATLAS_DATABASE_URL", f"sqlite:///{DB_PATH}")

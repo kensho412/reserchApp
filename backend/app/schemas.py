@@ -60,6 +60,9 @@ class PageCard(BaseModel):
     summary_ja: str = ""
     authors: list[str] = []
     year: Optional[int] = None
+    # Best display thumbnail: absolute http(s) URL (video / og:image) or a
+    # "files/<name>" path the client resolves against its server URL. None = none.
+    thumbnail: Optional[str] = None
     updated_at: datetime
 
 

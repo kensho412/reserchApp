@@ -124,6 +124,8 @@ def _fill_metadata(session: Session, page: models.Page, ex: extract.Extracted) -
         page.extracted_text_path = ex.text_path
     if ex.thumbnail_path and not page.thumbnail_path:
         page.thumbnail_path = ex.thumbnail_path
+    if ex.image_url and not page.thumbnail_url:
+        page.thumbnail_url = ex.image_url
     if ex.title and (not page.title or page.title.lower() in ("untitled", "new page")):
         page.title = ex.title
     if ex.authors and not page.authors:

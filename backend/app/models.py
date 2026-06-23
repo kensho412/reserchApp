@@ -37,7 +37,8 @@ class Page(SQLModel, table=True):
     source_url: Optional[str] = None
     video_url: Optional[str] = None
     pdf_path: Optional[str] = None                   # relative to FILES_DIR
-    thumbnail_path: Optional[str] = None
+    thumbnail_path: Optional[str] = None             # local file (PDF page 1), relative to FILES_DIR
+    thumbnail_url: Optional[str] = None              # remote image (og:image from source_url)
     extracted_text_path: Optional[str] = None        # relative to FILES_DIR
 
     authors_json: str = "[]"                         # JSON list[str]
